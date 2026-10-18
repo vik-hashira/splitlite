@@ -7,13 +7,14 @@ import SettleUpModal from "../components/SettleUpModal";
 import UnlockOverlay from "../components/UnlockOverlay";
 import { CATEGORIES, categoryEmoji } from "../lib/categories";
 import {
-  RETENTION_MS, addExpense, canModify, currentUid, addMember, backfillExpiry, deleteExpense, deleteGroup, subscribeExpenses,
+  RETENTION_MS, addExpense, addMember, claimAdmin, backfillExpiry, deleteExpense, deleteGroup, subscribeExpenses,
   subscribeGroup, updateExpense,
 } from "../lib/firebase";
 import { track } from "../lib/analytics";
 import { dayLabel, formatMoney } from "../lib/format";
 import { isUnlocked, markUnlocked } from "../lib/pin";
 import { calculateBalances, calculateSettlements, equalShares, type Settlement } from "../lib/settlements";
+import { canDeleteGroup, canEditExpense, isGroupAdmin } from "../lib/permissions";
 import { forgetGroup, getMe, rememberGroup, setMe as saveMe } from "../lib/storage";
 import type { Expense, ExpenseCategory, ExpenseInput, Group } from "../lib/types";
 
@@ -34,11 +35,7 @@ export default function GroupPage() {
   const [pickMeOpen, setPickMeOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const [uid, setUid] = useState<string | null>(null);
-
-  useEffect(() => {
-    currentUid().then(setUid, () => {});
-  }, []);
+  const [claimOpen, setClaimOpen] = useState(false);
 
   useEffect(() => {
     const onErr = (e: Error) => setError(e.message);
@@ -175,7 +172,7 @@ export default function GroupPage() {
         </div>
         <div className="flex items-center justify-between px-4 pb-3 pt-2">
           <button onClick={() => setPickMeOpen(true)} className="text-sm text-slate-600 hover:text-slate-900">
-            {me ? <>You: <b>{me}</b> ▾</> : "Who are you? ▾"}
+            {me ? <>You: <b>{me}</b>{isGroupAdmin(group, me) && " · admin"} ▾</> : "Who are you? ▾"}
           </button>
           <span className="text-xs text-slate-500">Total spent {formatMoney(total, group.currency)}</span>
         </div>
@@ -234,7 +231,7 @@ export default function GroupPage() {
             <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">{day}</h2>
             <ul className="space-y-2">
               {items.map((e) => (
-                <ExpenseCard key={e.id} expense={e} currency={group.currency} me={me} canEdit={canModify(e, uid)}
+                <ExpenseCard key={e.id} expense={e} currency={group.currency} me={me} canEdit={canEditExpense(e, group, me)}
                   onEdit={() => setEditing(e)} onDelete={() => removeExpense(e)} />
               ))}
             </ul>
@@ -244,7 +241,15 @@ export default function GroupPage() {
         <footer className="mt-10 border-t border-slate-200 pt-4 text-center text-xs text-slate-500">
           <p>This group and all its expenses are deleted automatically on{" "}
             <b>{new Date(expiresAt).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}</b>.</p>
-          {uid != null && group.creatorUid === uid && (
+          {!group.creatorName && me && (
+            <p className="mt-2">
+              This group has no admin yet.{" "}
+              <button onClick={() => setClaimOpen(true)} className="font-medium text-emerald-700 hover:underline">
+                Make {me} the admin
+              </button>
+            </p>
+          )}
+          {canDeleteGroup(group, me) && (
             <button onClick={() => setDeleteOpen(true)} className="mt-2 text-red-600 hover:underline">Delete this group now</button>
           )}
         </footer>
@@ -263,6 +268,19 @@ export default function GroupPage() {
       {settleOpen && (
         <SettleUpModal settlements={settlements} balances={balances} currency={group.currency} me={me}
           onRecord={recordSettlement} onClose={() => setSettleOpen(false)} />
+      )}
+      {claimOpen && me && (
+        <Modal title="Become group admin?" onClose={() => setClaimOpen(false)}>
+          <p className="text-sm text-slate-600">
+            <b>{me}</b> will be the admin of <b>{group.title}</b>: able to edit or delete any expense and delete the
+            group. Everyone else can only edit what they added. <b>This can't be changed later.</b>
+          </p>
+          <button
+            onClick={async () => { await claimAdmin(groupId, me); track("admin_claimed"); setClaimOpen(false); }}
+            className="mt-4 w-full rounded-xl bg-emerald-600 py-3 font-semibold text-white hover:bg-emerald-700">
+            Yes, make {me} admin
+          </button>
+        </Modal>
       )}
       {deleteOpen && (
         <DeleteGroupModal title={group.title} count={expenses.length} onConfirm={removeGroup} onClose={() => setDeleteOpen(false)} />

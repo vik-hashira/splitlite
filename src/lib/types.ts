@@ -9,8 +9,8 @@ export interface Group {
   createdAt: number;
   updatedAt: number;
   expireAt?: { toMillis(): number };
-  /** Anonymous-auth uid of the device that created the group; absent on groups made before ownership. */
-  creatorUid?: string;
+  /** Member who created the group (its admin); absent on groups made before admins existed. */
+  creatorName?: string;
 }
 
 export interface Expense {
@@ -22,9 +22,8 @@ export interface Expense {
   splitAmong: string[];
   splitType: "EQUAL";
   createdAt: number;
+  /** Member who added it ("Who are you?" at the time); they and the group admin can edit it. */
   createdByName: string;
-  /** Anonymous-auth uid of the device that added it; absent on older expenses, which anyone can edit. */
-  creatorUid?: string;
 }
 
-export type ExpenseInput = Omit<Expense, "id" | "creatorUid">;
+export type ExpenseInput = Omit<Expense, "id">;

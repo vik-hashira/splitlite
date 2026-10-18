@@ -6,7 +6,7 @@ import { createGroup } from "../lib/firebase";
 import { track } from "../lib/analytics";
 import { CURRENCIES } from "../lib/format";
 import { hashPin, markUnlocked } from "../lib/pin";
-import { forgetGroup, getRecentGroups, rememberGroup } from "../lib/storage";
+import { forgetGroup, getRecentGroups, rememberGroup, setMe } from "../lib/storage";
 
 const EMOJIS = ["🌴", "🏔️", "🏖️", "🎉", "🍻", "🚗", "✈️", "🏕️", "🏠", "🎂", "⛺", "🛶"];
 const randomEmoji = () => EMOJIS[Math.floor(Math.random() * EMOJIS.length)];
@@ -17,13 +17,16 @@ export default function CreateGroup() {
   const [emoji, setEmoji] = useState(randomEmoji);
   const [currency, setCurrency] = useState("INR");
   const [members, setMembers] = useState<string[]>([]);
+  const [creator, setCreator] = useState("");
   const [usePin, setUsePin] = useState(false);
   const [pin, setPin] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [recent, setRecent] = useState(getRecentGroups);
 
-  const valid = title.trim() && members.length >= 2 && (!usePin || pin.length === 4);
+  // Fall back to the first member if the chosen "you" was removed from the list.
+  const admin = members.includes(creator) ? creator : members[0] ?? "";
+  const valid = title.trim() && members.length >= 2 && admin && (!usePin || pin.length === 4);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -36,8 +39,10 @@ export default function CreateGroup() {
         title: fullTitle,
         currency,
         members,
+        creatorName: admin,
         pinHash: usePin ? await hashPin(pin) : null,
       });
+      setMe(id, admin);
       track("group_created", { currency, members: members.length, has_pin: usePin });
       rememberGroup(id, fullTitle);
       markUnlocked(id);
@@ -76,6 +81,19 @@ export default function CreateGroup() {
           <span className="text-sm font-medium">Members <span className="font-normal text-slate-500">(at least 2)</span></span>
           <div className="mt-1"><MemberInput members={members} onChange={setMembers} /></div>
         </div>
+
+        {members.length > 0 && (
+          <label className="block">
+            <span className="text-sm font-medium">Which one is you?</span>
+            <select value={admin} onChange={(e) => setCreator(e.target.value)}
+              className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 focus:border-emerald-600 focus:outline-none">
+              {members.map((m) => <option key={m}>{m}</option>)}
+            </select>
+            <span className="mt-1 block text-xs text-slate-500">
+              You'll be the group admin: you can edit or delete any expense and delete the group.
+            </span>
+          </label>
+        )}
 
         <div>
           <label className="flex items-center justify-between">
