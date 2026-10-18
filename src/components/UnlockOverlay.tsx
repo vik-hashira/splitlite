@@ -5,6 +5,7 @@ import { hashPin } from "../lib/pin";
 export default function UnlockOverlay({ title, pinHash, onUnlock }: { title: string; pinHash: string; onUnlock: () => void }) {
   const [pin, setPin] = useState("");
   const [wrong, setWrong] = useState(false);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     if (pin.length !== 4) return;
@@ -16,7 +17,7 @@ export default function UnlockOverlay({ title, pinHash, onUnlock }: { title: str
         setWrong(true);
         setPin("");
       }
-    });
+    }, (e: Error) => !stale && setError(e.message));
     return () => { stale = true; };
   }, [pin, pinHash, onUnlock]);
 
@@ -27,6 +28,7 @@ export default function UnlockOverlay({ title, pinHash, onUnlock }: { title: str
       <p className="mb-6 mt-1 text-sm text-slate-600">Enter the group PIN</p>
       <PinInput value={pin} onChange={(v) => { setWrong(false); setPin(v); }} autoFocus />
       {wrong && <p className="mt-4 text-sm text-red-600">Incorrect PIN, try again.</p>}
+      {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
     </main>
   );
 }
