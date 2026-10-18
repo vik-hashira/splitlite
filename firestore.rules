@@ -1,0 +1,42 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+
+    function validGroup(d) {
+      return d.title is string && d.title.size() > 0 && d.title.size() <= 80
+        && d.currency is string && d.currency.size() == 3
+        && d.members is list && d.members.size() >= 2 && d.members.size() <= 50
+        && (d.pinHash == null || (d.pinHash is string && d.pinHash.size() == 64));
+    }
+
+    match /groups/{groupId} {
+      // `get` only, never `list`: the unguessable document ID is the access token,
+      // so groups must not be enumerable.
+      allow get: if signedIn();
+      allow create: if signedIn() && validGroup(request.resource.data);
+      // Members can be added and timestamps bumped; the PIN and currency are fixed at creation.
+      allow update: if signedIn() && validGroup(request.resource.data)
+        && request.resource.data.pinHash == resource.data.pinHash
+        && request.resource.data.currency == resource.data.currency
+        && request.resource.data.members.hasAll(resource.data.members);
+      allow delete: if false;
+
+      match /expenses/{expenseId} {
+        function validExpense(d) {
+          return d.title is string && d.title.size() > 0 && d.title.size() <= 120
+            && d.amount is number && d.amount > 0 && d.amount < 100000000
+            && d.paidBy is string
+            && d.splitAmong is list && d.splitAmong.size() > 0
+            && d.category in ['food', 'travel', 'stay', 'drinks', 'tickets', 'general']
+            && d.splitType == 'EQUAL';
+        }
+        allow read: if signedIn() && exists(/databases/$(database)/documents/groups/$(groupId));
+        allow create, update: if signedIn()
+          && exists(/databases/$(database)/documents/groups/$(groupId))
+          && validExpense(request.resource.data);
+        allow delete: if signedIn();
+      }
+    }
+  }
+}
