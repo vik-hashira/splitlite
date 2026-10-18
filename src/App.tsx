@@ -1,6 +1,7 @@
 import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
 import CreateGroup from "./pages/CreateGroup";
 import GroupPage from "./pages/GroupPage";
+import RouteTracker from "./components/RouteTracker";
 import { firebaseConfigured } from "./lib/firebase";
 
 export default function App() {
@@ -17,6 +18,7 @@ export default function App() {
   }
   return (
     <HashRouter>
+      <RouteTracker />
       <Routes>
         <Route path="/" element={<CreateGroup />} />
         <Route path="/g/:groupId" element={<GroupPage />} />

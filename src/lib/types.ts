@@ -8,6 +8,7 @@ export interface Group {
   members: string[];
   createdAt: number;
   updatedAt: number;
+  expireAt?: { toMillis(): number };
 }
 
 export interface Expense {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import Chip from "../components/Chip";
 import ExpenseModal from "../components/ExpenseModal";
 import Modal from "../components/Modal";
@@ -7,18 +7,21 @@ import SettleUpModal from "../components/SettleUpModal";
 import UnlockOverlay from "../components/UnlockOverlay";
 import { CATEGORIES, categoryEmoji } from "../lib/categories";
 import {
-  addExpense, addMember, deleteExpense, subscribeExpenses, subscribeGroup, updateExpense,
+  RETENTION_MS, addExpense, addMember, backfillExpiry, deleteExpense, deleteGroup, subscribeExpenses,
+  subscribeGroup, updateExpense,
 } from "../lib/firebase";
+import { track } from "../lib/analytics";
 import { dayLabel, formatMoney } from "../lib/format";
 import { isUnlocked, markUnlocked } from "../lib/pin";
 import { calculateBalances, calculateSettlements, type Settlement } from "../lib/settlements";
-import { getMe, rememberGroup, setMe as saveMe } from "../lib/storage";
+import { forgetGroup, getMe, rememberGroup, setMe as saveMe } from "../lib/storage";
 import type { Expense, ExpenseCategory, ExpenseInput, Group } from "../lib/types";
 
 type MemberFilter = { kind: "all" } | { kind: "paidByMe" } | { kind: "splitWithMe" } | { kind: "member"; name: string };
 
 export default function GroupPage() {
   const { groupId = "" } = useParams();
+  const navigate = useNavigate();
   const [group, setGroup] = useState<Group | null | undefined>(undefined);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [error, setError] = useState("");
@@ -30,6 +33,7 @@ export default function GroupPage() {
   const [settleOpen, setSettleOpen] = useState(false);
   const [pickMeOpen, setPickMeOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   useEffect(() => {
     const onErr = (e: Error) => setError(e.message);
@@ -42,12 +46,25 @@ export default function GroupPage() {
     if (group) rememberGroup(group.id, group.title);
   }, [group?.id, group?.title]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Groups created before auto-expiry existed get stamped once on first open.
+  useEffect(() => {
+    if (group && !group.expireAt) backfillExpiry(group).catch(() => {});
+  }, [group]);
+
+  useEffect(() => {
+    if (group) track("group_opened", { has_pin: Boolean(group.pinHash), members: group.members.length });
+  }, [group?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Ask "who are you?" once the group is available and we don't know yet.
   useEffect(() => {
     if (group && (!me || !group.members.includes(me))) setPickMeOpen(true);
   }, [group, me]);
 
-  const onUnlock = useCallback(() => { markUnlocked(groupId); setUnlocked(true); }, [groupId]);
+  const onUnlock = useCallback(() => {
+    markUnlocked(groupId);
+    setUnlocked(true);
+    track("group_unlocked");
+  }, [groupId]);
 
   const balances = useMemo(() => (group ? calculateBalances(group.members, expenses) : {}), [group, expenses]);
   const settlements = useMemo(() => (group ? calculateSettlements(group.members, expenses) : []), [group, expenses]);
@@ -80,11 +97,32 @@ export default function GroupPage() {
   const myBalance = me ? balances[me] ?? 0 : 0;
   const total = expenses.reduce((s, e) => s + e.amount, 0);
 
-  const save = (input: ExpenseInput) =>
-    editing && editing !== "new" ? updateExpense(groupId, editing.id, input) : addExpense(groupId, input);
+  const expiresAt = group.expireAt?.toMillis() ?? group.createdAt + RETENTION_MS;
+
+  const save = async (input: ExpenseInput) => {
+    if (editing && editing !== "new") {
+      await updateExpense(groupId, editing.id, input);
+      track("expense_edited", { category: input.category });
+    } else {
+      await addExpense(group, input);
+      track("expense_added", { category: input.category, split_count: input.splitAmong.length, currency: group.currency });
+    }
+  };
+
+  const removeExpense = async (e: Expense) => {
+    await deleteExpense(groupId, e.id);
+    track("expense_deleted");
+  };
+
+  const removeGroup = async () => {
+    await deleteGroup(groupId);
+    track("group_deleted", { expenses: expenses.length });
+    forgetGroup(groupId);
+    navigate("/", { replace: true });
+  };
 
   const recordSettlement = (s: Settlement) =>
-    addExpense(groupId, {
+    addExpense(group, {
       title: `Settlement: ${s.from} → ${s.to}`,
       category: "general",
       amount: s.amount,
@@ -93,12 +131,13 @@ export default function GroupPage() {
       splitType: "EQUAL",
       createdAt: Date.now(),
       createdByName: me ?? "Someone",
-    });
+    }).then(() => track("settlement_recorded"));
 
   const copyLink = async () => {
     try {
       await navigator.clipboard.writeText(window.location.href);
       setCopied(true);
+      track("share_link_copied");
       setTimeout(() => setCopied(false), 1500);
     } catch {
       window.prompt("Copy this link:", window.location.href);
@@ -123,7 +162,7 @@ export default function GroupPage() {
           </button>
           <span className="text-xs text-slate-500">Total spent {formatMoney(total, group.currency)}</span>
         </div>
-        <button onClick={() => setSettleOpen(true)}
+        <button onClick={() => { setSettleOpen(true); track("settle_up_opened", { transfers: settlements.length }); }}
           className={`flex w-full items-center justify-between px-4 py-3 text-left ${myBalance > 0.004 ? "bg-emerald-50 text-emerald-800" : myBalance < -0.004 ? "bg-red-50 text-red-800" : "bg-slate-100 text-slate-700"}`}>
           <span className="font-semibold">
             {!me ? "Pick who you are to see your balance"
@@ -163,11 +202,17 @@ export default function GroupPage() {
             <ul className="space-y-2">
               {items.map((e) => (
                 <ExpenseCard key={e.id} expense={e} currency={group.currency} me={me}
-                  onEdit={() => setEditing(e)} onDelete={() => deleteExpense(groupId, e.id)} />
+                  onEdit={() => setEditing(e)} onDelete={() => removeExpense(e)} />
               ))}
             </ul>
           </section>
         ))}
+
+        <footer className="mt-10 border-t border-slate-200 pt-4 text-center text-xs text-slate-500">
+          <p>This group and all its expenses are deleted automatically on{" "}
+            <b>{new Date(expiresAt).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}</b>.</p>
+          <button onClick={() => setDeleteOpen(true)} className="mt-2 text-red-600 hover:underline">Delete this group now</button>
+        </footer>
       </main>
 
       <button onClick={() => setEditing("new")}
@@ -183,6 +228,9 @@ export default function GroupPage() {
       {settleOpen && (
         <SettleUpModal settlements={settlements} balances={balances} currency={group.currency} me={me}
           onRecord={recordSettlement} onClose={() => setSettleOpen(false)} />
+      )}
+      {deleteOpen && (
+        <DeleteGroupModal title={group.title} count={expenses.length} onConfirm={removeGroup} onClose={() => setDeleteOpen(false)} />
       )}
       {pickMeOpen && (
         <WhoAreYou members={group.members} me={me} onPick={chooseMe} onClose={() => setPickMeOpen(false)}
@@ -248,6 +296,36 @@ function WhoAreYou({ members, me, onPick, onAdd, onClose }: {
           className="flex-1 rounded-xl border border-slate-300 px-3 py-2 text-sm" />
         <button disabled={!name || dup} className="rounded-xl bg-slate-900 px-4 text-sm text-white disabled:bg-slate-300">Join</button>
       </form>
+    </Modal>
+  );
+}
+
+function DeleteGroupModal({ title, count, onConfirm, onClose }: {
+  title: string; count: number; onConfirm: () => Promise<void>; onClose: () => void;
+}) {
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  return (
+    <Modal title="Delete group?" onClose={onClose}>
+      <p className="text-sm text-slate-600">
+        This permanently deletes <b>{title}</b> and its {count} expense{count === 1 ? "" : "s"} for everyone with the link.
+        It can't be undone.
+      </p>
+      <label className="mt-4 block text-sm">
+        Type <b>DELETE</b> to confirm
+        <input value={typed} onChange={(e) => setTyped(e.target.value)} autoFocus
+          className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2" />
+      </label>
+      {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+      <button disabled={typed !== "DELETE" || busy}
+        onClick={async () => {
+          setBusy(true);
+          try { await onConfirm(); } catch (err) { setError(err instanceof Error ? err.message : "Could not delete"); setBusy(false); }
+        }}
+        className="mt-4 w-full rounded-xl bg-red-600 py-3 font-semibold text-white hover:bg-red-700 disabled:bg-slate-300">
+        {busy ? "Deleting…" : "Delete forever"}
+      </button>
     </Modal>
   );
 }

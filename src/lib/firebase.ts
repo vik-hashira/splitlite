@@ -1,8 +1,8 @@
 import { initializeApp } from "firebase/app";
 import { getAuth, signInAnonymously } from "firebase/auth";
 import {
-  addDoc, collection, deleteDoc, doc, getFirestore, onSnapshot, orderBy, query,
-  setDoc, updateDoc,
+  Timestamp, addDoc, collection, deleteDoc, doc, getDocs, getFirestore, onSnapshot, orderBy, query,
+  setDoc, updateDoc, writeBatch,
 } from "firebase/firestore";
 import type { Expense, ExpenseInput, Group } from "./types";
 
@@ -13,13 +13,22 @@ const config = {
   storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
 };
 
 export const firebaseConfigured = Boolean(config.apiKey && config.projectId);
 
-const app = firebaseConfigured ? initializeApp(config) : null;
+export const app = firebaseConfigured ? initializeApp(config) : null;
 const db = app ? getFirestore(app) : (null as never);
 const auth = app ? getAuth(app) : (null as never);
+
+export const RETENTION_MS = 365 * 24 * 60 * 60 * 1000;
+/**
+ * A group and all its expenses share one `expireAt`, one year after the group was created.
+ * Firestore TTL policies on `expireAt` delete them (see README). TTL never cascades to
+ * subcollections, so every expense carries the group's timestamp too.
+ */
+const expiryFor = (createdAt: number) => Timestamp.fromMillis(createdAt + RETENTION_MS);
 
 let authReady: Promise<unknown> | null = null;
 /** Anonymous sign-in, done once per page load; security rules require an authenticated request. */
@@ -32,7 +41,7 @@ export async function createGroup(data: Omit<Group, "id" | "createdAt" | "update
   await ensureAuth();
   const ref = doc(collection(db, "groups"));
   const now = Date.now();
-  await setDoc(ref, { ...data, createdAt: now, updatedAt: now });
+  await setDoc(ref, { ...data, createdAt: now, updatedAt: now, expireAt: expiryFor(now) });
   return ref.id;
 }
 
@@ -73,9 +82,10 @@ export function subscribeExpenses(groupId: string, cb: (e: Expense[]) => void, o
 const touchGroup = (groupId: string) =>
   updateDoc(doc(db, "groups", groupId), { updatedAt: Date.now() });
 
-export async function addExpense(groupId: string, e: ExpenseInput) {
+export async function addExpense(group: Group, e: ExpenseInput) {
+  const groupId = group.id;
   await ensureAuth();
-  await addDoc(collection(db, "groups", groupId, "expenses"), e);
+  await addDoc(collection(db, "groups", groupId, "expenses"), { ...e, expireAt: expiryFor(group.createdAt) });
   await touchGroup(groupId);
 }
 
@@ -94,4 +104,30 @@ export async function deleteExpense(groupId: string, id: string) {
 export async function addMember(groupId: string, members: string[]) {
   await ensureAuth();
   await updateDoc(doc(db, "groups", groupId), { members, updatedAt: Date.now() });
+}
+
+/** Groups created before retention existed: stamp the group and its expenses once. */
+export async function backfillExpiry(group: Group) {
+  await ensureAuth();
+  const expireAt = expiryFor(group.createdAt);
+  const snap = await getDocs(collection(db, "groups", group.id, "expenses"));
+  for (let i = 0; i < snap.docs.length; i += 450) {
+    const batch = writeBatch(db);
+    snap.docs.slice(i, i + 450).forEach((d) => batch.update(d.ref, { expireAt }));
+    await batch.commit();
+  }
+  await updateDoc(doc(db, "groups", group.id), { expireAt });
+}
+
+/** Permanently delete a group and every expense in it. */
+export async function deleteGroup(groupId: string) {
+  await ensureAuth();
+  const snap = await getDocs(collection(db, "groups", groupId, "expenses"));
+  // Firestore batches cap at 500 writes; leave headroom for the group doc itself.
+  for (let i = 0; i < snap.docs.length; i += 450) {
+    const batch = writeBatch(db);
+    snap.docs.slice(i, i + 450).forEach((d) => batch.delete(d.ref));
+    await batch.commit();
+  }
+  await deleteDoc(doc(db, "groups", groupId));
 }
