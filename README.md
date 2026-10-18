@@ -60,8 +60,8 @@ booleans only.
    `VITE_FIREBASE_STORAGE_BUCKET`, `VITE_FIREBASE_MESSAGING_SENDER_ID`, `VITE_FIREBASE_APP_ID`,
    `VITE_FIREBASE_MEASUREMENT_ID`.
 2. Push to `main`. The workflow tests, builds, and publishes `dist/` to the `gh-pages` branch.
-3. Settings → Pages → Source: **Deploy from a branch**, `gh-pages` / root.
-4. In Firebase Console → Authentication → Settings → **Authorized domains**, add `<user>.github.io`.
+3. Settings → Pages → Source: **Deploy from a branch**, `gh-pages` / root. Custom domain: `splitlite.info` (set by the workflow's `cname`).
+4. In Firebase Console → Authentication → Settings → **Authorized domains**, add `splitlite.info` (and `<user>.github.io`).
 
 ## Security model
 
