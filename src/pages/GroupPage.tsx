@@ -13,7 +13,7 @@ import {
 import { track } from "../lib/analytics";
 import { dayLabel, formatMoney } from "../lib/format";
 import { isUnlocked, markUnlocked } from "../lib/pin";
-import { calculateBalances, calculateSettlements, type Settlement } from "../lib/settlements";
+import { calculateBalances, calculateSettlements, equalShares, type Settlement } from "../lib/settlements";
 import { forgetGroup, getMe, rememberGroup, setMe as saveMe } from "../lib/storage";
 import type { Expense, ExpenseCategory, ExpenseInput, Group } from "../lib/types";
 
@@ -74,10 +74,22 @@ export default function GroupPage() {
     switch (memberFilter.kind) {
       case "paidByMe": return e.paidBy === me;
       case "splitWithMe": return me != null && e.splitAmong.includes(me);
-      case "member": return e.paidBy === memberFilter.name || e.splitAmong.includes(memberFilter.name);
+      case "member": return e.paidBy === memberFilter.name;
       default: return true;
     }
   }), [expenses, catFilter, memberFilter, me]);
+
+  // Exact per-person share (same cent rounding as balances) of whatever the filters show.
+  const filteredSummary = useMemo(() => {
+    let total = 0;
+    let myShare = 0;
+    for (const e of filtered) {
+      const cents = Math.round(e.amount * 100);
+      total += cents;
+      if (me && e.splitAmong.includes(me)) myShare += equalShares(cents, e.splitAmong)[me];
+    }
+    return { total: total / 100, myShare: myShare / 100 };
+  }, [filtered, me]);
 
   const grouped = useMemo(() => {
     const out: { day: string; items: Expense[] }[] = [];
@@ -186,11 +198,27 @@ export default function GroupPage() {
         {me && <Chip active={memberFilter.kind === "splitWithMe"} onClick={() => setMemberFilter({ kind: "splitWithMe" })}>Split with me</Chip>}
         {group.members.map((m) => (
           <Chip key={m} active={memberFilter.kind === "member" && memberFilter.name === m}
-            onClick={() => setMemberFilter({ kind: "member", name: m })}>{m}</Chip>
+            onClick={() => setMemberFilter({ kind: "member", name: m })}>Paid by {m}</Chip>
         ))}
       </div>
 
       <main className="px-4 pt-4">
+        {(catFilter !== "all" || memberFilter.kind !== "all") && filtered.length > 0 && (
+          <div className="mb-4 flex items-center justify-between rounded-xl bg-slate-900 px-4 py-3 text-white">
+            <div>
+              <p className="text-xs text-slate-300">
+                {filterLabel(catFilter, memberFilter)} · {filtered.length} expense{filtered.length === 1 ? "" : "s"}
+              </p>
+              <p className="text-xl font-bold">{formatMoney(filteredSummary.total, group.currency)}</p>
+            </div>
+            {me && (
+              <div className="text-right">
+                <p className="text-xs text-slate-300">Your share</p>
+                <p className="font-semibold">{formatMoney(filteredSummary.myShare, group.currency)}</p>
+              </div>
+            )}
+          </div>
+        )}
         {grouped.length === 0 && (
           <p className="py-16 text-center text-slate-500">
             {expenses.length === 0 ? "No expenses yet. Tap + to add the first one." : "No expenses match these filters."}
@@ -238,6 +266,16 @@ export default function GroupPage() {
       )}
     </div>
   );
+}
+
+function filterLabel(cat: ExpenseCategory | "all", member: MemberFilter): string {
+  const c = CATEGORIES.find((x) => x.id === cat);
+  const parts = [c ? `${c.emoji} ${c.label}` : ""];
+  if (member.kind === "paidByMe") parts.push("paid by you");
+  else if (member.kind === "splitWithMe") parts.push("split with you");
+  else if (member.kind === "member") parts.push(`paid by ${member.name}`);
+  const label = parts.filter(Boolean).join(", ");
+  return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
 function ExpenseCard({ expense: e, currency, me, onEdit, onDelete }: {
