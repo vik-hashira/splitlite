@@ -7,7 +7,7 @@ import SettleUpModal from "../components/SettleUpModal";
 import UnlockOverlay from "../components/UnlockOverlay";
 import { CATEGORIES, categoryEmoji } from "../lib/categories";
 import {
-  RETENTION_MS, addExpense, addMember, backfillExpiry, deleteExpense, deleteGroup, subscribeExpenses,
+  RETENTION_MS, addExpense, canModify, currentUid, addMember, backfillExpiry, deleteExpense, deleteGroup, subscribeExpenses,
   subscribeGroup, updateExpense,
 } from "../lib/firebase";
 import { track } from "../lib/analytics";
@@ -34,6 +34,11 @@ export default function GroupPage() {
   const [pickMeOpen, setPickMeOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [uid, setUid] = useState<string | null>(null);
+
+  useEffect(() => {
+    currentUid().then(setUid, () => {});
+  }, []);
 
   useEffect(() => {
     const onErr = (e: Error) => setError(e.message);
@@ -229,7 +234,7 @@ export default function GroupPage() {
             <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">{day}</h2>
             <ul className="space-y-2">
               {items.map((e) => (
-                <ExpenseCard key={e.id} expense={e} currency={group.currency} me={me}
+                <ExpenseCard key={e.id} expense={e} currency={group.currency} me={me} canEdit={canModify(e, uid)}
                   onEdit={() => setEditing(e)} onDelete={() => removeExpense(e)} />
               ))}
             </ul>
@@ -239,7 +244,9 @@ export default function GroupPage() {
         <footer className="mt-10 border-t border-slate-200 pt-4 text-center text-xs text-slate-500">
           <p>This group and all its expenses are deleted automatically on{" "}
             <b>{new Date(expiresAt).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}</b>.</p>
-          <button onClick={() => setDeleteOpen(true)} className="mt-2 text-red-600 hover:underline">Delete this group now</button>
+          {uid != null && group.creatorUid === uid && (
+            <button onClick={() => setDeleteOpen(true)} className="mt-2 text-red-600 hover:underline">Delete this group now</button>
+          )}
         </footer>
       </main>
 
@@ -278,8 +285,8 @@ function filterLabel(cat: ExpenseCategory | "all", member: MemberFilter): string
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
-function ExpenseCard({ expense: e, currency, me, onEdit, onDelete }: {
-  expense: Expense; currency: string; me: string | null; onEdit: () => void; onDelete: () => void;
+function ExpenseCard({ expense: e, currency, me, canEdit, onEdit, onDelete }: {
+  expense: Expense; currency: string; me: string | null; canEdit: boolean; onEdit: () => void; onDelete: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
   const myShare = me && e.splitAmong.includes(me) ? e.amount / e.splitAmong.length : 0;
@@ -301,12 +308,14 @@ function ExpenseCard({ expense: e, currency, me, onEdit, onDelete }: {
             {" · "}
             <button onClick={() => setConfirming(false)} className="text-slate-500">Cancel</button>
           </span>
-        ) : (
+        ) : canEdit ? (
           <span className="text-xs text-slate-400">
             <button onClick={onEdit} className="hover:text-slate-700">Edit</button>
             {" · "}
             <button onClick={() => setConfirming(true)} className="hover:text-red-600">Delete</button>
           </span>
+        ) : (
+          <span className="text-xs text-slate-400">by {e.createdByName}</span>
         )}
       </div>
     </li>

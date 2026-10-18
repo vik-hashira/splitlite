@@ -110,7 +110,7 @@ export default function ExpenseModal({ group, me, existing, onSave, onClose }: P
 
         {error && <p className="text-sm text-red-600">{error}</p>}
         <button disabled={!valid || busy}
-          className="w-full rounded-xl bg-emerald-600 py-3 font-semibold text-white hover:bg-emerald-700 disabled:bg-slate-300">
+          className="sticky bottom-0 w-full rounded-xl bg-emerald-600 py-3 font-semibold text-white shadow-[0_-8px_16px_white] hover:bg-emerald-700 disabled:bg-slate-300">
           {busy ? "Saving…" : existing ? "Save changes" : "Add expense"}
         </button>
       </form>

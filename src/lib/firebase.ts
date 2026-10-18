@@ -1,5 +1,5 @@
 import { initializeApp } from "firebase/app";
-import { getAuth, signInAnonymously } from "firebase/auth";
+import { getAuth, signInAnonymously, type UserCredential } from "firebase/auth";
 import {
   Timestamp, addDoc, collection, deleteDoc, doc, getDocs, getFirestore, onSnapshot, orderBy, query,
   setDoc, updateDoc, writeBatch,
@@ -30,18 +30,27 @@ export const RETENTION_MS = 365 * 24 * 60 * 60 * 1000;
  */
 const expiryFor = (createdAt: number) => Timestamp.fromMillis(createdAt + RETENTION_MS);
 
-let authReady: Promise<unknown> | null = null;
-/** Anonymous sign-in, done once per page load; security rules require an authenticated request. */
+let authReady: Promise<UserCredential> | null = null;
+/**
+ * Anonymous sign-in, done once per page load. Firebase keeps the same anonymous user in this
+ * browser's storage, so the uid identifies "this device" for ownership checks.
+ */
 export function ensureAuth() {
   if (!authReady) authReady = signInAnonymously(auth);
   return authReady;
 }
 
-export async function createGroup(data: Omit<Group, "id" | "createdAt" | "updatedAt">): Promise<string> {
-  await ensureAuth();
+export const currentUid = async () => (await ensureAuth()).user.uid;
+
+/** Whether this device may edit/delete a doc. Docs from before ownership existed are open to all. */
+export const canModify = (doc: { creatorUid?: string }, uid: string | null) =>
+  !doc.creatorUid || doc.creatorUid === uid;
+
+export async function createGroup(data: Omit<Group, "id" | "createdAt" | "updatedAt" | "creatorUid">): Promise<string> {
+  const creatorUid = await currentUid();
   const ref = doc(collection(db, "groups"));
   const now = Date.now();
-  await setDoc(ref, { ...data, createdAt: now, updatedAt: now, expireAt: expiryFor(now) });
+  await setDoc(ref, { ...data, createdAt: now, updatedAt: now, expireAt: expiryFor(now), creatorUid });
   return ref.id;
 }
 
@@ -84,8 +93,8 @@ const touchGroup = (groupId: string) =>
 
 export async function addExpense(group: Group, e: ExpenseInput) {
   const groupId = group.id;
-  await ensureAuth();
-  await addDoc(collection(db, "groups", groupId, "expenses"), { ...e, expireAt: expiryFor(group.createdAt) });
+  const creatorUid = await currentUid();
+  await addDoc(collection(db, "groups", groupId, "expenses"), { ...e, expireAt: expiryFor(group.createdAt), creatorUid });
   await touchGroup(groupId);
 }
 
@@ -119,7 +128,7 @@ export async function backfillExpiry(group: Group) {
   await updateDoc(doc(db, "groups", group.id), { expireAt });
 }
 
-/** Permanently delete a group and every expense in it. */
+/** Permanently delete a group and every expense in it. Only the group's creator is allowed to. */
 export async function deleteGroup(groupId: string) {
   await ensureAuth();
   const snap = await getDocs(collection(db, "groups", groupId, "expenses"));

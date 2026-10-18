@@ -3,6 +3,11 @@ service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
 
+    // Documents created before ownership existed have no creatorUid; they keep the old open behaviour.
+    function ownerOf(d) { return d.get('creatorUid', null); }
+    function ownsOrLegacy(d) { return ownerOf(d) == null || ownerOf(d) == request.auth.uid; }
+    function ownerUnchanged() { return ownerOf(request.resource.data) == ownerOf(resource.data); }
+
     function validGroup(d) {
       return d.title is string && d.title.size() > 0 && d.title.size() <= 80
         && d.currency is string && d.currency.size() == 3
@@ -15,17 +20,21 @@ service cloud.firestore {
       // `get` only, never `list`: the unguessable document ID is the access token,
       // so groups must not be enumerable.
       allow get: if signedIn();
-      allow create: if signedIn() && validGroup(request.resource.data);
-      // Members can be added and timestamps bumped; the PIN and currency are fixed at creation.
+      allow create: if signedIn() && validGroup(request.resource.data)
+        && request.resource.data.creatorUid == request.auth.uid;
+      // Members can be added and timestamps bumped; the PIN, currency and creator are fixed at creation.
       allow update: if signedIn() && validGroup(request.resource.data)
         && request.resource.data.pinHash == resource.data.pinHash
         && request.resource.data.currency == resource.data.currency
         && request.resource.data.members.hasAll(resource.data.members)
+        && ownerUnchanged()
         && (!('expireAt' in resource.data) || request.resource.data.expireAt == resource.data.expireAt);
-      // Anyone with the link can delete the group (expenses are deleted first by the client).
-      allow delete: if signedIn();
+      // Only the group's creator can delete it (the client deletes its expenses first). Groups from
+      // before ownership have no known creator, so nobody can delete them; TTL still removes them.
+      allow delete: if signedIn() && ownerOf(resource.data) == request.auth.uid;
 
       match /expenses/{expenseId} {
+        function group() { return get(/databases/$(database)/documents/groups/$(groupId)).data; }
         function validExpense(d) {
           return d.title is string && d.title.size() > 0 && d.title.size() <= 120
             && d.amount is number && d.amount > 0 && d.amount < 100000000
@@ -36,10 +45,16 @@ service cloud.firestore {
             && d.expireAt is timestamp;
         }
         allow read: if signedIn() && exists(/databases/$(database)/documents/groups/$(groupId));
-        allow create, update: if signedIn()
+        allow create: if signedIn()
           && exists(/databases/$(database)/documents/groups/$(groupId))
-          && validExpense(request.resource.data);
-        allow delete: if signedIn();
+          && validExpense(request.resource.data)
+          && request.resource.data.creatorUid == request.auth.uid;
+        // Only whoever added an expense can edit or delete it.
+        allow update: if signedIn() && validExpense(request.resource.data)
+          && ownsOrLegacy(resource.data) && ownerUnchanged();
+        // The group's creator may also delete any expense, which deleting the whole group needs.
+        allow delete: if signedIn()
+          && (ownsOrLegacy(resource.data) || ownerOf(group()) == request.auth.uid);
       }
     }
   }
