@@ -11,4 +11,4 @@
 | 2026-10-18 | `f3256dd` | Keyboard-safe bottom sheets; per-device ownership (superseded) |
 | 2026-10-18 | `cb356fa` | Name-based ownership: adder or admin edits; admin-only group delete; one-time admin claim |
 | 2026-10-18 | n/a (data) | Kokan Trip admin set to Vikram; owner set admins on their other groups |
-| 2026-10-19 | (this) | Project docs in `docs/` + `CLAUDE.md` |
+| 2026-10-19 | `152f6c6` | Project docs in `docs/` + `CLAUDE.md` |
