@@ -12,6 +12,7 @@ Zero-friction group expense splitting. No accounts — share a link (optionally 
 - Create a group with title, emoji, currency, members, and an optional 4-digit PIN (SHA-256 hashed client-side)
 - Recent groups remembered in `localStorage`; PIN unlock remembered per tab in `sessionStorage`
 - "Who are you?" picker, so each device sees a personal balance ("You owe ₹350")
+- Group admin (the creator): only the adder or admin can edit/delete an expense, only the admin deletes the group
 - Live expense feed grouped by date, with category and member filter chips
 - Add/edit expense modal with auto-category detection ("coffee" → 🍕 Food)
 - Settle Up: greedy debt simplification, plus "Mark paid" to record a settlement
@@ -49,7 +50,7 @@ TTL deletion usually happens within a day of the expiry time.
 
 Sent to Google Analytics 4 through Firebase Analytics (needs `VITE_FIREBASE_MEASUREMENT_ID`):
 `page_view` (group IDs collapsed to `/g/:groupId`), `group_created`, `group_opened`, `group_unlocked`,
-`group_deleted`, `expense_added`, `expense_edited`, `expense_deleted`, `settle_up_opened`,
+`group_deleted`, `admin_claimed`, `expense_added`, `expense_edited`, `expense_deleted`, `settle_up_opened`,
 `settlement_recorded`, `share_link_copied`, `outbound_click`. Params are counts, category, currency and
 booleans only.
 
@@ -67,6 +68,9 @@ booleans only.
 
 The random 20-character Firestore document ID is the access token. The rules allow `get` but not
 `list` on groups, so groups can't be enumerated. They also validate document shape, make the PIN and
-currency immutable, keep `expireAt` fixed once set, and only let members be added (never removed).
-Anyone with the link can delete a group. The PIN is a convenience gate
-in the client, not strong security: anyone who has the link can read the data directly.
+currency immutable, keep `expireAt`, the admin (`creatorName`) and each expense's adder fixed once set, and
+only let members be added (never removed). Who may edit what is enforced in the app (there are no
+accounts to tell members apart). The PIN is a convenience gate in the client, not strong security:
+anyone who has the link can read the data directly.
+
+More detail for contributors and AI helpers: [`docs/`](docs/) and [`CLAUDE.md`](CLAUDE.md).
